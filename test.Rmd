@@ -1,0 +1,111 @@
+---
+title: "new"
+output: pdf_document
+date: "2024-12-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(MASS)
+suppressPackageStartupMessages(library(randomForest))
+library(e1071) # SVM
+library(rpart) # Decision tree
+
+```
+
+```{r}
+test_data = read.csv("test.csv")
+train_data = read.csv("train.csv")
+```
+
+
+```{r}
+real_train = train_data[,-c(1,11)]
+real_test = test_data[,-c(1,10)]
+```
+
+
+```{r, eval=TRUE, echo = FALSE}
+## You should usually use a random seed to have repeatable results.
+## I always use 42, but you are free to choose a different seed.
+## You can try to vary your random seed to see if your conclusions
+## change (obviously, it might be because these are random algorithms).
+set.seed(42)
+
+
+
+
+#' root mean squared error measure
+rmse <- function(yhat, y) sqrt(mean((y - yhat)**2))
+
+#' split n items into k folds of roughly equal size
+kpart <- function(n, k) {
+    rep_len(1:k, length.out = n)
+}
+
+#' Find cross-validation predictions
+cv <- function(
+               formula, # Formula specifying which variables to use
+               data, # Dataset
+               model = lm, # Type of model to train (as a function)
+               n = nrow(data), # number of rows in the data matrix
+               k = min(n, 10), # number of cross-validation folds
+               split = kpart(n, k), # the split of n data items into k folds
+               ## function to train a model on data
+               train = function(data) model(formula, data = data),
+               ## function to make predictions on the trained model
+               pred = function(model, data) predict(model, newdata = data)) {
+    yhat <- NULL
+    for (i in 1:k) {
+        ## go through all folds, train on other folds, and make a prediction
+        mod <- train(data[split != i, ])
+        if (is.null(yhat)) {
+            ## initialise yhat to something of correct data type,
+            yhat <- pred(mod, data)
+        } else {
+            # yhat[split == i] <- pred(mod, data[split == i, ])
+        }
+    }
+    yhat # finally, output cross-validation predictions
+}
+
+## Dummy model is here a model that ignores the covariates and always
+## predicts the mean of the training data. We use a linear regression
+## model with only intercept as a dummy model.
+dummy <- function(formula, data) {
+    target <- all.vars(formula[[2]])
+    lm(as.formula(sprintf("%s ~ 1", target)), data)
+}
+
+## Some regression models implemented in R. For documentation, just type
+## ?lm, ?rpart etc. Notice that you need the above-mentioned libraries to be
+## able to use these models.
+models <- list(
+    Dummy = dummy,
+    OLS = lm,
+    RF = randomForest,
+    SVM = svm,
+    RT = rpart
+)
+
+```
+
+```{r}
+# 
+a <- sapply(models, function(model) {
+    mod <- model(Next_Tmax ~ ., data = real_train)
+    c(
+        Train = rmse(predict(mod, newdata = real_train), real_train$Next_Tmax),
+        Test = rmse(predict(mod, newdata = real_test), real_test$Next_Tmax),
+        CV = rmse(cv(Next_Tmax ~ ., real_train, model), real_train$Next_Tmax)
+    )
+})
+
+knitr::kable(t(a), "simple", digits = 3)
+```
+
+

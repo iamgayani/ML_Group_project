@@ -1,0 +1,218 @@
+---
+title: "ML_Group_Project"
+output: pdf_document
+date: "2024-11-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+library(boot)
+library(MASS)
+```
+
+```{r, echo=FALSE}
+test_data = read.csv("test.csv")
+train_data = read.csv("train.csv")
+```
+
+# Data Exploration
+
+ADD SAMARA'S part
+
+```{r}
+#cor(df_train[,-c(1,10)])
+```
+
+
+It is worth to note that "decane_toluene" is not in the test data set
+
+
+# Missing Data
+
+Missing data was found in the 'parentspecies' attribute. According to the definition of the 'parentspecies' attribute, missing values imply a meaning.They are not missing randomly but due to difficulty in retrieving the 'parentspecies'. Therefore, a new level was created as 'Unknown'. 
+
+```{r}
+
+test_data$parentspecies[test_data$parentspecies == ""] <- "Unknown"
+train_data$parentspecies[train_data$parentspecies == ""] <- "Unknown"
+
+```
+
+
+```{r, echo=FALSE}
+train_data$parentspecies = factor(train_data$parentspecies)
+train_levels <- levels(train_data$parentspecies)  # Get levels from train data
+# Apply those levels to the test data
+test_data$parentspecies <- factor(test_data$parentspecies, levels = train_levels)
+```
+
+
+# Dummy model
+
+
+A dummy model is a supervised learning model that gives the same constant output regardless of the values of the covariates.
+We first built a dummy model and calculated the training error and the cross validation error.
+
+
+
+```{r}
+set.seed(123)
+dummy_model = glm(log_pSat_Pa ~ 1, data = train_data[,-1])
+dummy_cv_error_5 = cv.glm(train_data[,-1] , dummy_model , K = 10)$delta[1]
+dummy_error_train = mean((train_data$log_pSat_Pa - predict(dummy_model, train_data))^2)
+```
+
+```{r, echo=FALSE}
+error_df = data.frame(model = "Dummy", train = dummy_error_train, cv = dummy_cv_error_5, kaggle_score = -0.0001)
+knitr::kable(error_df)
+```
+
+# OLS as a baseline model
+
+ten fold cross validation was done to get the cross validation error
+
+```{r, warning=FALSE}
+set.seed(123)
+ols_fit = glm(log_pSat_Pa ~ ., data = train_data[,-1])
+cv_error_10 = cv.glm(train_data[,-1] , ols_fit , K = 10)$delta[1]
+error_train = mean((train_data$log_pSat_Pa - predict(ols_fit, train_data))^2)
+
+```
+
+# Plotting
+
+```{r, echo=FALSE}
+#summary(ols_fit)
+par(mfrow=c(2,2))
+plot(ols_fit)
+
+hist(ols_fit$residuals)
+```
+
+
+```{r, echo=FALSE}
+new_row <- data.frame(model = "ols", train = error_train, cv = cv_error_5, kaggle_score = 0.7163)
+error_df <- rbind(error_df, new_row)
+knitr::kable(error_df)
+```
+
+
+
+```{r, echo=FALSE}
+y_hat = predict(ols_fit,newdata = test_data)
+
+#ID = test_data$ID
+#TARGET = as.vector(y_hat)
+#df = data.frame(ID, TARGET)
+#write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
+```
+
+
+## Then we analyze the correlation between each column and the target, selecting columns with a correlation above 0.5 or 0.3, and then using these for the model prediction. However, even after trying these two methods, the prediction score didn’t change,
+
+# Lasso 
+
+Before moving to non-linear models we tried regularization using Lasso
+
+"decane_toluene" is not in the test data set. so it was handled in a way so that both train and test dataset has the same number of levels
+
+```{r, echo=FALSE}
+a1 = table(train_data$parentspecies)
+a2 = table(test_data$parentspecies)
+
+df = data.frame(a1,a2)
+df2 = df[,-3]
+colnames(df2) <- c("Level", "Freq_train", "Freq_test")
+
+knitr::kable(df2)
+```
+
+
+```{r, echo=FALSE}
+library(glmnet)
+
+y <- train_data$log_pSat_Pa  
+
+x_train <- model.matrix(log_pSat_Pa ~ . - 1, data = train_data[,-1])
+
+lasso_model <- glmnet(x_train, y, family = "gaussian", alpha = 1)
+
+error_train_lasso = mean((train_data$log_pSat_Pa - predict(lasso_model, x_train))^2)
+
+```
+
+Cross validation to obtain the best lambda(tuning parameter)
+
+```{r, echo=FALSE}
+set.seed(123)
+cvfit = cv.glmnet(x_train, y, family = "gaussian", type.measure = "mse")
+
+
+best_lambda = cvfit$lambda.min
+#best_lambda
+
+```
+
+best lambda obtained was 0.002651092
+
+Plot
+```{r}
+plot(cvfit)
+```
+
+WE can use lasso as a variable selection method
+
+```{r, echo=FALSE}
+lasso_coefficients = coef(cvfit, s = "lambda.min")
+non_zero_coeffs = lasso_coefficients[lasso_coefficients != 0]
+c = predict(lasso_model,type = "coefficients", s = best_lambda)[1:26,]
+knitr::kable(c)
+```
+
+
+
+```{r, echo=FALSE}
+error_cv_lasso = mean((train_data$log_pSat_Pa - predict(cvfit, x_train, s = best_lambda))^2)
+
+new_row2 <- data.frame(model = "Lasso", train = error_train_lasso, cv = error_cv_lasso, kaggle_score = 0.7160)
+error_df <- rbind(error_df, new_row2)
+
+knitr::kable(error_df)
+
+```
+
+```{r, echo=FALSE}
+x_test <- model.matrix(~ . - 1, data = test_data[,-1])
+y_pred_test = predict(cvfit, newx = x_test, s = best_lambda)
+```
+
+
+
+```{r, echo=FALSE}
+#ID = test_data$ID
+#TARGET = as.vector(y_pred_test)
+#df = data.frame(ID, TARGET)
+#write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
+```
+
+PCR
+
+# Regression tree
+
+```{r}
+
+```
+
+
+Boosting 
+
+And then gradient Boosting by coco
+
+Random forests
+
+SVR
+
+
