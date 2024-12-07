@@ -18,6 +18,8 @@ library(xgboost)
 library(glmnet)
 library(randomForest)
 library(pls)
+library(e1071)
+library(caret)
 
 ```
 
@@ -58,6 +60,8 @@ test_data$parentspecies <- factor(test_data$parentspecies, levels = train_levels
 ```
 
 
+
+
 # Dummy model
 
 
@@ -78,7 +82,7 @@ error_df = data.frame(model = "Dummy", train = dummy_error_train, cv = dummy_cv_
 knitr::kable(error_df)
 ```
 
-# OLS as a baseline model
+# OLS as a baseline model: kaggle_score = 0.7163
 
 ten fold cross validation was done to get the cross validation error
 
@@ -109,19 +113,19 @@ knitr::kable(error_df)
 
 
 
-```{r, echo=FALSE}
-y_hat = predict(ols_fit,newdata = test_data)
+```{r, echo=FALSE, eval=FALSE}
+y_hat = predict(ols_fit,newdata = test_data[,-1])
 
-#ID = test_data$ID
-#TARGET = as.vector(y_hat)
-#df = data.frame(ID, TARGET)
-#write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
+ID = test_data$ID
+TARGET = as.vector(y_hat)
+df = data.frame(ID, TARGET)
+write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
 ```
 
 
 ## Then we analyze the correlation between each column and the target, selecting columns with a correlation above 0.5 or 0.3, and then using these for the model prediction. However, even after trying these two methods, the prediction score didn’t change,
 
-# Lasso 
+# Lasso 0.7160
 
 Before moving to non-linear models we tried regularization using Lasso
 
@@ -209,7 +213,7 @@ df = data.frame(ID, TARGET)
 write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
 ```
 
-# PCR
+# PCR: Kaggel Score: 0.7163
 
 ```{r}
 set.seed(9)
@@ -218,10 +222,40 @@ pcr_fit = pcr(log_pSat_Pa ~ ., data = train_data[,-1], scale = TRUE, validation 
 
 ```{r}
 #summary(pcr_fit)
+
+validationplot(pcr_fit)
 ```
 
 ```{r}
-validationplot(pcr_fit, val.type = "MSEP")
+min.pcr = which.min(MSEP(pcr_fit)$val[1,1, ] ) - 1
+min.pcr
+```
+
+```{r}
+summary(pcr_fit)
+
+```
+
+
+predicting using 28 PCs (Lowest cross validation error occurs when using 28 PCs)
+
+```{r}
+pcr_fit_28PCs = pcr(log_pSat_Pa ~ ., data = train_data[,-1], scale = TRUE, ncomp = 28)
+
+```
+
+```{r, echo=FALSE, eval=FALSE}
+
+
+y_hat = predict(pcr_fit_28PCs, newdata = test_data[,-1], scale = TRUE)
+y_hat_last_component = y_hat[ , , 28]
+
+ID = test_data$ID
+TARGET = as.vector(y_hat_last_component)
+df = data.frame(ID, TARGET)
+write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
+
+
 ```
 
 
@@ -266,7 +300,7 @@ error_val_rt
 
 ```{r, warning=FALSE, results='hide'}
 y_train <- train_data$log_pSat_Pa  
-x_train <- model.matrix(log_pSat_Pa ~ . - 1, data = train_data[,-1])
+x_train <- model.matrix(~ . - 1, data = train_data[,-c(1,2)])
 
 
 dtrain <- xgb.DMatrix(data = x_train, label = y_train)
@@ -288,6 +322,14 @@ xgb_model <- xgb.train(
   watchlist = list(train = dtrain),
   verbose = 1
 )
+
+
+```
+
+
+```{r}
+save(xgb_model, file = "xgb_model.RData")
+
 ```
 
 
@@ -387,13 +429,12 @@ knitr::include_graphics("RF.jpg")
 ```
 
 
-# SVR
+# SVR Selected features from lasso : Kaggle score: 0.5195
 
 Selected features from lasso is used : Removed "NumOfAtoms" ,  "NumOfN","C.C.C.O.in.non.aromatic.ring","hydroxyl..alkyl." , "nitrate"
 
 ```{r, eval=FALSE}
-library(e1071)
-library(caret)
+
 
 y_train <- train_data$log_pSat_Pa 
 
@@ -410,6 +451,7 @@ svm_model <- svm(
 ```
 
 
+
 ```{r, eval=FALSE}
 
 x_test <- model.matrix(~ . - 1, data = test_data[,-c(1,2,6,12,13,19)])
@@ -422,4 +464,105 @@ write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
 
 Kaggle score: 0.5195
 
+# SVR using all the features: Kaggle score: 0.7554
 
+```{r, eval=FALSE}
+
+y_train <- train_data$log_pSat_Pa 
+
+x_train <- model.matrix(~ . - 1, data = train_data[,-c(1,2)])
+
+svm_model <- svm(
+  x = x_train, y = y_train,
+  type = "eps-regression",
+  kernel = "radial",
+  cost = 1,
+  gamma = 1 / ncol(x_train)
+)
+
+save(svm_model, file = "svm_model.RData")
+
+```
+
+
+```{r, eval=FALSE, echo=FALSE}
+x_test <- model.matrix(~ . - 1, data = test_data[,-1])
+y_hat = predict(svm_model,newdata = x_test)
+ID = test_data$ID
+TARGET = as.vector(y_hat)
+df = data.frame(ID, TARGET)
+write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
+
+```
+
+Kaggle score: 0.7554
+
+Why "eps-regression" ??
+
+# SVR Without "eps-regression" same Kaggle score: 0.7554
+
+```{r, eval=FALSE}
+y_train <- train_data$log_pSat_Pa 
+
+x_train <- model.matrix(~ . - 1, data = train_data[,-c(1,2)])
+
+svm_model_test <- svm(
+  x = x_train, y = y_train,
+  kernel = "radial",
+  cost = 1,
+  gamma = 1 / ncol(x_train)
+)
+
+save(svm_model_test, file = "svm_model_test.RData")
+
+```
+
+```{r, eval=FALSE, echo=FALSE}
+x_test <- model.matrix(~ . - 1, data = test_data[,-1])
+y_hat = predict(svm_model_test,newdata = x_test)
+ID = test_data$ID
+TARGET = as.vector(y_hat)
+df = data.frame(ID, TARGET)
+write.csv(df[, c("ID", "TARGET")], "dummy_submission.csv", row.names = FALSE)
+
+```
+
+
+# check 
+In the R e1071 package, if gamma is not specified explicitly when using an RBF kernel, it is often set to 1 / ncol(x_train). This value is commonly used as a heuristic to start with, providing a reasonable balance between overfitting and underfitting.
+
+#SVM Tuning : Run later 
+
+```{r, eval=FALSE}
+scaled_test_data = scale(test_data[,-c(1,10)])
+
+test_data[,-c(1,10)] <- scale(test_data[,-c(1,10)])
+```
+
+
+```{r, eval=FALSE}
+y_train <- train_data$log_pSat_Pa 
+
+x_train <- model.matrix(~ . - 1, data = train_data[,-c(1,2)])
+
+tune_grid <- expand.grid(
+  sigma = c(0.001, 0.01, 0.1),
+  C = c(0.1, 1, 10)
+)
+
+control <- trainControl(method = "cv", number = 5)
+
+svm_tuned <- train(
+  x = x_train, y = y_train,
+  method = "svmRadial",       
+  tuneGrid = tune_grid,
+  trControl = control
+  #preProcess = c("center", "scale")
+)
+
+#print(svm_tuned$bestTune)
+save(model, file = "svm_tuned")
+```
+
+
+Next step : Perform PCA for varible selection and then running SVM
